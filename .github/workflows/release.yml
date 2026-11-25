@@ -1,0 +1,52 @@
+name: build-test-release
+
+# Every push to main is built, tested and published as a new release.
+# Installed copies of Work Timer check the latest release and update themselves.
+on:
+  push:
+    branches: [ main ]
+    paths-ignore:
+      - '**.md'
+      - 'docs/**'
+      - 'LICENSE'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Version
+        id: v
+        shell: pwsh
+        run: echo "ver=1.0.${{ github.run_number }}" >> $env:GITHUB_OUTPUT
+
+      - name: Build
+        shell: powershell
+        run: ./build.ps1 -Out "$PWD\dist\WorkTimer.exe" -Version "${{ steps.v.outputs.ver }}.0"
+
+      - name: Test
+        shell: powershell
+        run: |
+          pip install openpyxl
+          New-Item -ItemType Directory -Force work | Out-Null
+          powershell -STA -NoProfile -ExecutionPolicy Bypass -File tests/test.ps1 -Exe "$PWD\dist\WorkTimer.exe" -Work "$PWD\work"
+          if ($LASTEXITCODE -ne 0) { throw "tests failed" }
+
+      - name: Checksum
+        shell: powershell
+        run: |
+          $h = (Get-FileHash dist\WorkTimer.exe -Algorithm SHA256).Hash.ToLower()
+          [IO.File]::WriteAllText("$PWD\dist\WorkTimer.exe.sha256", "$h  WorkTimer.exe`n")
+
+      - name: Publish release
+        shell: powershell
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release create "v${{ steps.v.outputs.ver }}" dist\WorkTimer.exe dist\WorkTimer.exe.sha256 `
+            --target "${{ github.sha }}" --title "Work Timer v${{ steps.v.outputs.ver }}" --generate-notes --latest
